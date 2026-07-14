@@ -1,15 +1,31 @@
-const express = require('express');
-const fs = require('fs');
-const app = express();
-const PORT = 5000;
+let cars = [];
 
-app.get('/cars', (req, res) => {
-  fs.readFile('cars.json', (err, data) => {
-    if (err) return res.status(500).send('Error reading data');
-    res.json(JSON.parse(data));
-  });
+fetch('cars.json')
+.then(res => res.json())
+.then(data => {
+  cars = data;
+  renderCars(cars);
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+function renderCars(list){
+  const container = document.getElementById('cars-container');
+
+  container.innerHTML = list.map(car => `
+    <div class="car-card">
+      <img src="images/${car.image}" alt="${car.brand}">
+      <div class="car-info">
+        <h3>${car.brand} ${car.model}</h3>
+        <p>Year: ${car.year}</p>
+        <p>Price: $${car.price}</p>
+        <p>Mileage: ${car.mileage} km</p>
+      </div>
+    </div>
+  `).join('');
+}
+
+document.getElementById('search').addEventListener('input', e=>{
+  const keyword = e.target.value.toLowerCase();
+  renderCars(
+    cars.filter(c => c.brand.toLowerCase().includes(keyword))
+  );
 });

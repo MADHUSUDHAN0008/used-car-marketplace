@@ -1,12 +1,20 @@
 [
   {
-    "id":1,
-    "brand":"Toyota",
-    "model":"Innova",
-    "year":2022,
-    "price":"18 Lakhs",
-    "fuel":"Diesel",
-    "mileage":"45000 km",
-    "image":"images/car1.jpg"
+    "id": 1,
+    "brand": "Toyota",
+    "model": "Corolla",
+    "year": 2020,
+    "price": 15000,
+    "mileage": 45000,
+    "image": "car1.jpg"
+  },
+  {
+    "id": 2,
+    "brand": "Honda",
+    "model": "Civic",
+    "year": 2019,
+    "price": 14500,
+    "mileage": 50000,
+    "image": "car2.jpg"
   }
 ]
