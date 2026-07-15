@@ -1,81 +1,45 @@
 pipeline {
     agent any
 
-    options {
-        timestamps()
-        disableConcurrentBuilds()
+    environment {
+        APP_NAME = "used-car-marketplace"
+        DOCKER_IMAGE = "lingala89/used-car-marketplace"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+        DOCKER_CREDENTIALS = "dockerhub-creds"
+
+        EC2_HOST = "YOUR_EC2_IP"
+        EC2_USER = "ubuntu"
+        SSH_CREDENTIALS = "used-car-key"
     }
 
-    environment {
-        PATH = "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:${env.PATH}"
-
-        IMAGE_NAME = "lingala89/used-car-marketplace"
-        IMAGE_TAG = "latest"
-
-        CONTAINER_NAME = "used-car-marketplace"
-        CONTAINER_PORT = "8083"
-
-        K8S_DEPLOYMENT = "used-car-marketplace"
-        K8S_SERVICE = "used-car-marketplace-service"
+    options {
+        timestamps()
     }
 
     stages {
 
-        stage('Checkout') {
+        stage('Checkout Source') {
             steps {
+                echo "Checking out source code..."
                 checkout scm
             }
         }
 
-        stage('Git Information') {
+        stage('Verify Files') {
             steps {
                 sh '''
-                echo "========== USER =========="
-                whoami
-
-                echo "========== WORKSPACE =========="
                 pwd
-
-                echo "========== PATH =========="
-                echo $PATH
-
-                echo "========== GIT VERSION =========="
-                git --version
-
-                echo "========== GIT STATUS =========="
-                git status || true
-
-                echo "========== LAST COMMIT =========="
-                git log --oneline -1
-                '''
-            }
-        }
-
-        stage('Verify Docker') {
-            steps {
-                sh '''
-                echo "========== DOCKER =========="
-
-                which docker
-                docker --version
-                docker info
+                ls -la
                 '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh '''
-                docker build -t ${IMAGE_NAME}:${IMAGE_TAG} .
-                '''
-            }
-        }
-
-        stage('Docker Images') {
-            steps {
-                sh '''
-                docker images
-                '''
+                sh """
+                docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} .
+                docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${DOCKER_IMAGE}:latest
+                """
             }
         }
 
@@ -83,161 +47,85 @@ pipeline {
             steps {
                 withCredentials([
                     usernamePassword(
-                        credentialsId: 'dockerhub',
+                        credentialsId: "${DOCKER_CREDENTIALS}",
                         usernameVariable: 'DOCKER_USER',
                         passwordVariable: 'DOCKER_PASS'
                     )
                 ]) {
                     sh '''
-                    echo "$DOCKER_PASS" | docker login \
-                    -u "$DOCKER_USER" \
-                    --password-stdin
+                    echo "$DOCKER_PASS" | docker login -u "$DOCKER_USER" --password-stdin
                     '''
                 }
             }
         }
 
-        stage('Docker Push') {
+        stage('Push Docker Image') {
             steps {
-                sh '''
-                docker push ${IMAGE_NAME}:${IMAGE_TAG}
-                '''
+                sh """
+                docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
+                docker push ${DOCKER_IMAGE}:latest
+                """
             }
         }
 
-        stage('Docker Pull') {
+        stage('Deploy to AWS EC2') {
             steps {
-                sh '''
-                docker pull ${IMAGE_NAME}:${IMAGE_TAG}
-                '''
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        docker pull ${DOCKER_IMAGE}:latest
+
+                        docker stop ${APP_NAME} || true
+                        docker rm ${APP_NAME} || true
+
+                        docker run -d \
+                            --name ${APP_NAME} \
+                            --restart always \
+                            -p 80:80 \
+                            ${DOCKER_IMAGE}:latest
+                    '
+                    """
+                }
             }
         }
 
-        stage('Remove Old Container') {
+        stage('Verify Deployment') {
             steps {
-                sh '''
-                docker rm -f ${CONTAINER_NAME} || true
-                '''
-            }
-        }
-
-        stage('Run Docker Container') {
-            steps {
-                sh '''
-                docker run -d \
-                --name ${CONTAINER_NAME} \
-                -p ${CONTAINER_PORT}:80 \
-                ${IMAGE_NAME}:${IMAGE_TAG}
-                '''
-            }
-        }
-
-        stage('Docker Logs') {
-            steps {
-                sh '''
-                docker logs ${CONTAINER_NAME} || true
-                '''
-            }
-        }
-
-        stage('Docker Copy') {
-            steps {
-                sh '''
-                mkdir -p backup
-
-                docker cp \
-                ${CONTAINER_NAME}:/usr/share/nginx/html/index.html \
-                backup/index.html || true
-                '''
-            }
-        }
-
-        stage('Kubernetes Deploy') {
-            steps {
-                sh '''
-                kubectl apply -f k8s/deployment.yaml
-                kubectl apply -f k8s/service.yaml
-                '''
-            }
-        }
-
-        stage('Rollout Status') {
-            steps {
-                sh '''
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} --timeout=180s
-                '''
-            }
-        }
-
-        stage('Verify Kubernetes') {
-            steps {
-                sh '''
-                echo "===== Deployments ====="
-                kubectl get deployments
-
-                echo "===== Pods ====="
-                kubectl get pods -o wide
-
-                echo "===== Services ====="
-                kubectl get svc
-
-                echo "===== Nodes ====="
-                kubectl get nodes
-                '''
-            }
-        }
-
-        stage('Application Test') {
-            steps {
-                sh '''
-                kubectl get svc ${K8S_SERVICE}
-                '''
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        docker ps
+                    '
+                    """
+                }
             }
         }
 
         stage('Cleanup') {
             steps {
-                sh '''
-                docker image prune -f || true
-                docker container prune -f || true
-                '''
+                sh "docker image prune -f"
             }
         }
     }
 
     post {
-
         success {
-            echo '================================='
-            echo 'BUILD SUCCESSFUL'
-            echo '================================='
-
-            sh '''
-            echo "Docker Image:"
-            docker images | grep networksource || true
-
-            echo "Running Containers:"
-            docker ps || true
-            '''
+            echo "===================================="
+            echo "Build Successful"
+            echo "Docker Image Built"
+            echo "Docker Image Pushed"
+            echo "Application Deployed to AWS EC2"
+            echo "===================================="
         }
 
         failure {
-            echo '================================='
-            echo 'BUILD FAILED'
-            echo '================================='
-
-            sh '''
-            echo "Rolling back Kubernetes deployment..."
-
-            kubectl rollout undo deployment/${K8S_DEPLOYMENT} || true
-
-            kubectl get deployments || true
-            kubectl get pods || true
-            '''
+            echo "===================================="
+            echo "Build Failed"
+            echo "Check Jenkins Console Output"
+            echo "===================================="
         }
 
         always {
-            echo 'Cleaning workspace...'
             cleanWs()
         }
     }
