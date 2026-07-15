@@ -1,19 +1,9 @@
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: used-car-marketplace
-spec:
-  replicas: 2
-  selector:
-    matchLabels:
-      app: used-car-marketplace
-  template:
-    metadata:
-      labels:
-        app: used-car-marketplace
-    spec:
-      containers:
-      - name: app
-        image: used-car-marketplace:latest
-        ports:
-        - containerPort: 80
+stage('K8s Debug') {
+    steps {
+        sh '''
+        kubectl config view
+        kubectl config current-context
+        kubectl cluster-info
+        '''
+    }
+}
