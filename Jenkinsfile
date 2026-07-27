@@ -2,12 +2,14 @@ pipeline {
     agent any
 
     environment {
-        PATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
-
         APP_NAME = "used-car-marketplace"
         DOCKER_IMAGE = "lingala89/used-car-marketplace"
         IMAGE_TAG = "${BUILD_NUMBER}"
         DOCKER_CREDENTIALS = "dockerhub-creds"
+
+        EC2_HOST = "used-car-key"
+        EC2_USER = "ubuntu"
+        SSH_CREDENTIALS = "used-car-key"
     }
 
     options {
@@ -18,33 +20,26 @@ pipeline {
 
         stage('Checkout Source') {
             steps {
+                echo "Checking out source code..."
                 checkout scm
             }
         }
 
-        stage('Verify Docker') {
+        stage('Verify Files') {
             steps {
                 sh '''
-                docker --version
-                docker info
-                '''
-            }
-        }
-
-        stage('Clean Docker') {
-            steps {
-                sh '''
-                docker system prune -af || true
+                pwd
+                ls -la
                 '''
             }
         }
 
         stage('Build Docker Image') {
             steps {
-                sh '''
+                sh """
                 docker build -t ${DOCKER_IMAGE}:${IMAGE_TAG} .
                 docker tag ${DOCKER_IMAGE}:${IMAGE_TAG} ${DOCKER_IMAGE}:latest
-                '''
+                """
             }
         }
 
@@ -66,37 +61,60 @@ pipeline {
 
         stage('Push Docker Image') {
             steps {
-                sh '''
+                sh """
                 docker push ${DOCKER_IMAGE}:${IMAGE_TAG}
                 docker push ${DOCKER_IMAGE}:latest
-                '''
+                """
             }
         }
 
-        stage('Docker Images') {
+        stage('Deploy to AWS EC2') {
             steps {
-                sh '''
-                docker images
-                '''
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        docker pull ${DOCKER_IMAGE}:latest
+
+                        docker stop ${APP_NAME} || true
+                        docker rm ${APP_NAME} || true
+
+                        docker run -d \
+                            --name ${APP_NAME} \
+                            --restart always \
+                            -p 80:80 \
+                            ${DOCKER_IMAGE}:latest
+                    '
+                    """
+                }
+            }
+        }
+
+        stage('Verify Deployment') {
+            steps {
+                sshagent(credentials: ["${SSH_CREDENTIALS}"]) {
+                    sh """
+                    ssh -o StrictHostKeyChecking=no ${EC2_USER}@${EC2_HOST} '
+                        docker ps
+                    '
+                    """
+                }
             }
         }
 
         stage('Cleanup') {
             steps {
-                sh '''
-                docker image prune -f
-                '''
+                sh "docker image prune -f"
             }
         }
     }
 
     post {
-
         success {
             echo "===================================="
             echo "Build Successful"
             echo "Docker Image Built"
-            echo "Docker Image Pushed to Docker Hub"
+            echo "Docker Image Pushed"
+            echo "Application Deployed to AWS EC2"
             echo "===================================="
         }
 
